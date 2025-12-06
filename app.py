@@ -11,6 +11,8 @@ import random
 import os
 import io
 import requests
+import copy
+import math
 
 # --------------------------------------------------------------------------
 # [PDF 관련 라이브러리]
@@ -39,7 +41,7 @@ def register_korean_font():
                 f.write(response.content)
             pdfmetrics.registerFont(TTFont(font_name, file_name))
         except:
-            pass # 인터넷 연결 없으면 패스 (기본 폰트 사용 시 깨질 수 있음)
+            pass
             
     try:
         pdfmetrics.registerFont(TTFont(font_name, file_name))
@@ -71,7 +73,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------
-# [2] 데이터베이스 (시공 시나리오 데이터)
+# [2] 데이터베이스 (시공 시나리오 데이터 - 기준 면적 5m^2)
 # --------------------------------------------------------------------------
 SCENARIOS = {
     "tile_crack": {
@@ -119,21 +121,21 @@ SCENARIOS = {
                 "desc": "파손된 타일만 정밀하게 제거 후 동일 규격 타일로 교체합니다. 주변 타일 손상에 주의해야 합니다.",
                 "steps": ["타일 줄눈 커팅", "파손 타일 파쇄", "기존 접착제 제거", "새 타일 압착 시공", "줄눈 마감"],
                 "estimate_detail": [
-                    {"cat": "자재", "item": "바닥 타일", "spec": "300x300mm", "unit": "장", "qty": 3, "u_price": 5000, "t_price": 15000},
-                    {"cat": "자재", "item": "타일 접착제", "spec": "드라이픽스 5kg", "unit": "포", "qty": 1, "u_price": 10000, "t_price": 10000},
-                    {"cat": "자재", "item": "줄눈 시멘트", "spec": "소포장", "unit": "봉", "qty": 1, "u_price": 3000, "t_price": 3000},
-                    {"cat": "인건비", "item": "타일 기능공", "spec": "0.5품(오전)", "unit": "인", "qty": 0.5, "u_price": 400000, "t_price": 200000},
-                    {"cat": "폐기물", "item": "폐기물 처리", "spec": "폐기물 마대", "unit": "장", "qty": 1, "u_price": 5000, "t_price": 5000}
+                    {"cat": "자재", "item": "국산 자기질 바닥 타일", "spec": "300x300mm", "unit": "장", "qty": 5, "u_price": 5000, "t_price": 25000},
+                    {"cat": "자재", "item": "타일 접착제", "spec": "드라이픽스 10kg", "unit": "포", "qty": 1, "u_price": 15000, "t_price": 15000},
+                    {"cat": "자재", "item": "줄눈 시멘트", "spec": "홈멘트 2kg", "unit": "봉", "qty": 1, "u_price": 3000, "t_price": 3000},
+                    {"cat": "인건비", "item": "타일 기능공 (반품)", "spec": "오전 작업 기준", "unit": "식", "qty": 1, "u_price": 200000, "t_price": 200000},
+                    {"cat": "폐기물", "item": "폐기물 마대", "spec": "50L (불연성)", "unit": "장", "qty": 2, "u_price": 5000, "t_price": 10000}
                 ]
             },
             {
                 "lvl": 4, "name": "바닥 덧방 시공 (Tile on Tile)", "diy": False,
                 "duration": "1일", "tools": "타일 절단기, 레이저 레벨기",
-                "desc": "기존 타일 위에 타일용 강력 접착제를 사용하여 새 타일을 덧붙이는 공법입니다.",
+                "desc": "기존 타일 위에 타일용 강력 접착제를 사용하여 새 타일을 덧붙이는 공법입니다. 철거 소음이 없습니다.",
                 "steps": ["바닥 청소", "높이 조절", "본드 도포", "타일 압착", "줄눈 시공"],
                 "estimate_detail": [
-                    {"cat": "자재", "item": "논슬립 자기질 타일", "spec": "300x300 (1.5㎡)", "unit": "Box", "qty": 5, "u_price": 25000, "t_price": 125000},
-                    {"cat": "자재", "item": "압착 시멘트", "spec": "드라이픽스 20kg", "unit": "포", "qty": 1, "u_price": 25000, "t_price": 25000},
+                    {"cat": "자재", "item": "논슬립 자기질 타일", "spec": "300x300 (1.44㎡/Box)", "unit": "Box", "qty": 4, "u_price": 45000, "t_price": 180000},
+                    {"cat": "자재", "item": "압착 시멘트", "spec": "아덱스 X18 (난방용)", "unit": "포", "qty": 1, "u_price": 28000, "t_price": 28000},
                     {"cat": "자재", "item": "줄눈 시멘트", "spec": "비둘기색 2kg", "unit": "봉", "qty": 2, "u_price": 4000, "t_price": 8000},
                     {"cat": "부자재", "item": "타일 스페이서", "spec": "1.5mm 간격재", "unit": "봉", "qty": 1, "u_price": 5000, "t_price": 5000},
                     {"cat": "인건비", "item": "타일 기공", "spec": "1인 1일", "unit": "인", "qty": 1, "u_price": 350000, "t_price": 350000},
@@ -143,16 +145,26 @@ SCENARIOS = {
             {
                 "lvl": 5, "name": "전체 철거 및 방수/재시공", "diy": False,
                 "duration": "3~4일", "tools": "뿌레카, 방수 믹서",
-                "desc": "바닥층을 슬라브까지 완전 철거 후 3차 방수(액체+도막)를 새로 진행합니다. 누수를 원천 차단합니다.",
-                "steps": ["전체 철거", "1차 액체 방수", "2차 도막 방수(고뫄스)", "담수 테스트", "타일 시공"],
+                "desc": "바닥층을 완전 철거 후 3차 방수부터 새로 진행합니다. 도기류(변기/세면대)까지 모두 교체하는 전체 공사입니다.",
+                "steps": ["전체 철거", "1차 액체 방수", "2차 도막 방수(고뫄스)", "담수 테스트", "타일 및 도기 세팅"],
                 "estimate_detail": [
                     {"cat": "철거", "item": "철거 인건비", "spec": "바닥 전체 파쇄", "unit": "인", "qty": 1, "u_price": 300000, "t_price": 300000},
-                    {"cat": "폐기물", "item": "폐콘크리트 처리", "spec": "1톤 트럭 분량", "unit": "대", "qty": 1, "u_price": 300000, "t_price": 300000},
+                    {"cat": "폐기물", "item": "폐기물 처리 트럭", "spec": "1톤 카고 트럭", "unit": "대", "qty": 1, "u_price": 350000, "t_price": 350000},
+                    
+                    # [유지] 방수액: 15m2당 1통 기준
                     {"cat": "자재", "item": "액체 방수액", "spec": "18L (완결)", "unit": "통", "qty": 1, "u_price": 40000, "t_price": 40000},
                     {"cat": "자재", "item": "고뫄스 (도막방수)", "spec": "18L", "unit": "통", "qty": 1, "u_price": 60000, "t_price": 60000},
-                    {"cat": "자재", "item": "레미탈 (바닥용)", "spec": "40kg", "unit": "포", "qty": 10, "u_price": 6000, "t_price": 60000},
-                    {"cat": "자재", "item": "타일/도기 세트", "spec": "중급형", "unit": "식", "qty": 1, "u_price": 800000, "t_price": 800000},
-                    {"cat": "인건비", "item": "설비/방수/타일팀", "spec": "3일 소요", "unit": "식", "qty": 1, "u_price": 1200000, "t_price": 1200000}
+                    
+                    # [유지] 레미탈: 5m2 기준 8포
+                    {"cat": "자재", "item": "레미탈 (바닥 미장용)", "spec": "40kg/포", "unit": "포", "qty": 8, "u_price": 6000, "t_price": 48000},
+                    
+                    {"cat": "자재", "item": "논슬립 바닥 타일", "spec": "300x300 (1.44㎡/Box)", "unit": "Box", "qty": 4, "u_price": 45000, "t_price": 180000},
+                    
+                    {"cat": "도기/수전", "item": "대림/아메리칸스탠다드 양변기", "spec": "투피스 치마형", "unit": "개", "qty": 1, "u_price": 280000, "t_price": 280000},
+                    {"cat": "도기/수전", "item": "대림/아메리칸스탠다드 세면기", "spec": "반다리 일체형", "unit": "개", "qty": 1, "u_price": 230000, "t_price": 230000},
+                    {"cat": "도기/수전", "item": "무광 니켈 수전 세트", "spec": "샤워기,슬라이드바", "unit": "식", "qty": 1, "u_price": 180000, "t_price": 180000},
+                    
+                    {"cat": "인건비", "item": "설비/방수/타일팀", "spec": "3일 소요 (팀단위)", "unit": "식", "qty": 1, "u_price": 1300000, "t_price": 1300000}
                 ]
             }
         ]
@@ -281,7 +293,7 @@ SCENARIOS = {
                 "desc": "알루미늄 증착 필름과 PE폼이 부착된 스티커형 벽지를 붙여 냉기를 차단합니다.",
                 "steps": ["기존 벽지 제거", "벽면 사이즈 측정", "이면지 제거 후 부착", "실리콘 마감"],
                 "estimate_detail": [
-                    {"cat": "자재", "item": "고급 단열 벽지", "spec": "1m x 20m (5mm)", "unit": "롤", "qty": 1, "u_price": 60000, "t_price": 60000},
+                    {"cat": "자재", "item": "고급 단열 벽지 (5mm)", "spec": "1m x 20m/Roll", "unit": "롤", "qty": 1, "u_price": 60000, "t_price": 60000},
                     {"cat": "자재", "item": "바이오 실리콘", "spec": "틈새 마감용", "unit": "개", "qty": 2, "u_price": 4000, "t_price": 8000},
                     {"cat": "도구", "item": "커터칼", "spec": "대형", "unit": "개", "qty": 1, "u_price": 1000, "t_price": 1000},
                     {"cat": "도구", "item": "줄자", "spec": "5m", "unit": "개", "qty": 1, "u_price": 3000, "t_price": 3000}
@@ -300,9 +312,12 @@ SCENARIOS = {
                     {"cat": "도구", "item": "우레탄 폼건", "spec": "전용 건", "unit": "개", "qty": 1, "u_price": 15000, "t_price": 15000},
                     {"cat": "도구", "item": "실리콘 건", "spec": "회전형", "unit": "개", "qty": 1, "u_price": 5000, "t_price": 5000},
                     {"cat": "인건비", "item": "내장 목수", "spec": "1인 1일", "unit": "인", "qty": 1, "u_price": 350000, "t_price": 350000},
-                    {"cat": "마감자재", "item": "단열 벽지/도배지", "spec": "광폭 합지", "unit": "롤", "qty": 2, "u_price": 25000, "t_price": 50000},
+                    
+                    # [수정] 5m2 기준 -> 1롤 (기존 2롤 오류 수정)
+                    {"cat": "마감자재", "item": "신한/LG 광폭 합지", "spec": "93cm x 17.75m (1롤=5평)", "unit": "롤", "qty": 1, "u_price": 25000, "t_price": 25000},
+                    
                     {"cat": "마감시공", "item": "도배 시공비", "spec": "인건비 포함", "unit": "식", "qty": 1, "u_price": 150000, "t_price": 150000},
-                    {"cat": "폐기물", "item": "폐자재 처리", "spec": "마대 5장 분량", "unit": "식", "qty": 1, "u_price": 30000, "t_price": 30000}
+                    {"cat": "폐기물", "item": "폐자재 처리 마대", "spec": "마대 80L", "unit": "장", "qty": 5, "u_price": 3000, "t_price": 15000}
                 ]
             },
             {
@@ -317,9 +332,14 @@ SCENARIOS = {
                     {"cat": "부자재", "item": "목공 본드/타카핀", "spec": "205본드 외", "unit": "식", "qty": 1, "u_price": 30000, "t_price": 30000},
                     {"cat": "인건비", "item": "목수 팀장", "spec": "기공", "unit": "일", "qty": 2, "u_price": 400000, "t_price": 800000},
                     {"cat": "인건비", "item": "목수 조공", "spec": "보조", "unit": "일", "qty": 2, "u_price": 200000, "t_price": 400000},
-                    {"cat": "마감자재", "item": "규조토 페인트", "spec": "10L (고급형)", "unit": "통", "qty": 1, "u_price": 120000, "t_price": 120000},
-                    {"cat": "마감자재", "item": "줄퍼티/조인트테이프", "spec": "크랙 방지용", "unit": "식", "qty": 1, "u_price": 40000, "t_price": 40000},
-                    {"cat": "마감시공", "item": "도장공 인건비", "spec": "퍼티/샌딩/칠", "unit": "인", "qty": 1, "u_price": 250000, "t_price": 250000}
+                    
+                    # [수정] 5m2 기준 -> 1롤 (기존 3롤 오류 수정)
+                    {"cat": "마감자재", "item": "LG Z:IN 실크벽지", "spec": "106cm x 15.6m (1롤=5평)", "unit": "롤", "qty": 1, "u_price": 40000, "t_price": 40000},
+                    
+                    # [수정] 초배지 품목 구체화 (아이텍스 등 명시)
+                    {"cat": "마감자재", "item": "친환경 초배지 (아이텍스)", "spec": "1롤 (폭106cm x 50m)", "unit": "롤", "qty": 1, "u_price": 30000, "t_price": 30000},
+                    
+                    {"cat": "마감시공", "item": "도배사 인건비", "spec": "실크 도배/초배포함", "unit": "인", "qty": 1, "u_price": 250000, "t_price": 250000}
                 ]
             }
         ]
@@ -376,29 +396,22 @@ def create_cost_summary(solutions):
     return pd.DataFrame(summary_data)
 
 # --------------------------------------------------------------------------
-# [★핵심] PDF 생성 로직 (상세 견적 테이블 - 자재/도구/마감 분리 반영)
+# [★핵심] PDF 생성 로직
 # --------------------------------------------------------------------------
 def create_pdf_bytes(sol, defect_title):
-    """
-    상세 견적 항목(규격, 단위, 수량, 단가)이 포함된 전문적인 PDF 생성
-    """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=15*mm, leftMargin=15*mm, topMargin=20*mm, bottomMargin=20*mm)
     elements = []
 
-    # 스타일 설정
     styles = getSampleStyleSheet()
     style_title = ParagraphStyle('TitleKR', parent=styles['Title'], fontName=KOREAN_FONT, fontSize=22, spaceAfter=20)
     style_heading = ParagraphStyle('HeadingKR', parent=styles['Heading2'], fontName=KOREAN_FONT, fontSize=14, spaceAfter=10, textColor=colors.HexColor('#0d47a1'))
     style_body = ParagraphStyle('BodyKR', parent=styles['BodyText'], fontName=KOREAN_FONT, fontSize=10, leading=16)
-    style_caption = ParagraphStyle('CaptionKR', parent=styles['Normal'], fontName=KOREAN_FONT, fontSize=9, textColor=colors.gray)
-
-    # 1. 제목 및 기본 정보
+    
     elements.append(Paragraph(f"AI 시공 진단 및 견적 보고서", style_title))
     elements.append(Paragraph(f"진단 항목: {defect_title}", style_heading))
     elements.append(Spacer(1, 5*mm))
     
-    # 솔루션 요약
     info_text = f"""
     <b>선택된 시공법:</b> Lv.{sol['lvl']} {sol['name']}<br/>
     <b>시공 유형:</b> {'DIY (자가시공)' if sol['diy'] else '전문가 시공'}<br/>
@@ -412,7 +425,6 @@ def create_pdf_bytes(sol, defect_title):
     elements.append(Paragraph(sol['desc'], style_body))
     elements.append(Spacer(1, 8*mm))
 
-    # 시공 과정
     elements.append(Paragraph("📋 작업 순서 (Process)", style_heading))
     list_items = []
     for step in sol['steps']:
@@ -430,10 +442,8 @@ def create_pdf_bytes(sol, defect_title):
     elements.append(list_flowable)
     elements.append(Spacer(1, 10*mm))
 
-    # 2. 상세 견적서 테이블 (컬럼 세분화)
     elements.append(Paragraph("📋 상세 견적서 (Detailed Estimate)", style_heading))
     
-    # 헤더: No, 구분, 품목, 규격, 단위, 수량, 단가, 금액
     data = [['No', '구분', '품목 (Item)', '규격 (Spec)', '단위', '수량', '단가 (Unit)', '금액 (Total)']]
     
     total_cost = 0
@@ -442,21 +452,26 @@ def create_pdf_bytes(sol, defect_title):
             t_price = item['t_price']
             total_cost += t_price
             
+            # PDF 표시 시 소수점 정리 (정수면 정수로 표시)
+            qty_val = item['qty']
+            if isinstance(qty_val, float) and qty_val.is_integer():
+                qty_str = str(int(qty_val))
+            else:
+                qty_str = str(qty_val)
+                
             data.append([
                 str(idx + 1),
                 item['cat'],
                 item['item'],
                 item['spec'],
                 item['unit'],
-                str(item['qty']),
+                qty_str,
                 f"{item['u_price']:,}",
                 f"{t_price:,}"
             ])
     
-    # 합계 행
     data.append(['', '', '', '', '', '', '총 합계 (Total)', f"{total_cost:,} 원"])
 
-    # 테이블 너비 설정
     col_widths = [10*mm, 15*mm, 45*mm, 40*mm, 15*mm, 15*mm, 20*mm, 25*mm]
     
     t = Table(data, colWidths=col_widths)
@@ -464,38 +479,31 @@ def create_pdf_bytes(sol, defect_title):
         ('FONTNAME', (0, 0), (-1, -1), KOREAN_FONT),
         ('FONTSIZE', (0, 0), (-1, -1), 8),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('ALIGN', (2, 1), (2, -2), 'LEFT'),   # 품목명 좌측
-        ('ALIGN', (3, 1), (3, -2), 'LEFT'),   # 규격 좌측
-        ('ALIGN', (-2, 1), (-1, -2), 'RIGHT'), # 숫자 우측
+        ('ALIGN', (2, 1), (2, -2), 'LEFT'),
+        ('ALIGN', (3, 1), (3, -2), 'LEFT'),
+        ('ALIGN', (-2, 1), (-1, -2), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        
-        # 디자인
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f1f3f5')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
         ('FONTSIZE', (0, 0), (-1, 0), 9),
         ('FONTWEIGHT', (0, 0), (-1, 0), 'BOLD'),
         ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#dee2e6')),
         ('LINEBELOW', (0, 1), (-1, -2), 0.5, colors.HexColor('#eeeeee')),
-        
-        # 합계 행 스타일
         ('BACKGROUND', (-2, -1), (-1, -1), colors.HexColor('#fff9db')),
         ('FONTSIZE', (-2, -1), (-1, -1), 10),
         ('FONTNAME', (-2, -1), (-1, -1), KOREAN_FONT),
         ('TEXTCOLOR', (-1, -1), (-1, -1), colors.HexColor('#d63384')),
         ('ALIGN', (-1, -1), (-1, -1), 'RIGHT'),
         ('LINEABOVE', (0, -1), (-1, -1), 1.5, colors.HexColor('#fab005')),
-        ('SPAN', (0, -1), (5, -1)), # 합계 라벨 셀 병합
+        ('SPAN', (0, -1), (5, -1)),
     ]))
     
     elements.append(t)
-    elements.append(Spacer(1, 5*mm))
-    elements.append(Paragraph("* 본 견적은 표준 품셈 및 시장 단가 기준이며, 마감 자재(페인트/벽지)의 등급에 따라 비용은 변동될 수 있습니다.", style_caption))
-
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
 
-def render_combined_document(sol):
+def render_combined_document_view(sol):
     """
     [HTML 렌더링] 화면 표시용 - 심플 카드 뷰
     """
@@ -503,44 +511,31 @@ def render_combined_document(sol):
     duration = sol['duration']
     tools = sol['tools']
     
-    steps_html = "<br>".join([f"&nbsp;&nbsp;<b>{i+1}.</b> {step}" for i, step in enumerate(sol['steps'])])
-    
-    total_cost = 0
-    if 'estimate_detail' in sol:
-        for item in sol['estimate_detail']:
-            total_cost += item['t_price']
-            
-    return f"""
-    <div style="padding: 20px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef; margin-bottom: 20px;">
-        <div style="margin-bottom:15px; font-size:1rem; line-height:1.5; color:#212529;">
-            <b>💡 작업 설명:</b><br>
-            <span style="color:#495057;">{desc}</span>
-        </div>
-        
-        <div style="margin-bottom:15px; display:flex; gap:10px; flex-wrap:wrap;">
-            <span style="background-color:#e3f2fd; padding:6px 10px; border-radius:6px; color:#0d47a1; font-size:0.9rem;">
-                <b>⏱️ 소요 시간:</b> {duration}
-            </span>
-            <span style="background-color:#fff3e0; padding:6px 10px; border-radius:6px; color:#e65100; font-size:0.9rem;">
-                <b>🛠️ 필요 장비:</b> {tools}
-            </span>
-            <span style="background-color:#e8f5e9; padding:6px 10px; border-radius:6px; color:#2e7d32; font-size:0.9rem;">
-                <b>💰 예상 비용:</b> {total_cost:,} 원
-            </span>
-        </div>
+    steps_html = "".join([f"<div style='margin-bottom:4px;'>&nbsp;&nbsp;<b>{i+1}.</b> {step}</div>" for i, step in enumerate(sol['steps'])])
 
-        <div style="background:#ffffff; padding:15px; border-radius:6px; border:1px solid #dee2e6;">
-            <b style="color:#1971c2;">📋 시공 프로세스 (Process):</b>
-            <div style="margin-top:10px; line-height:1.6; color:#495057; font-size:0.95rem;">
-                {steps_html}
-            </div>
-        </div>
-        
-        <div style="margin-top:12px; text-align:right; font-size:0.85rem; color:#868e96;">
-            ※ 자재 규격, 마감재(페인트/도배) 비용 등 <b>상세 내역은 PDF 견적서</b>를 다운로드하여 확인하세요.
-        </div>
-    </div>
-    """
+    html_content = f"""
+<div style="padding: 20px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef; margin-bottom: 20px;">
+<div style="margin-bottom:15px; font-size:1rem; line-height:1.5; color:#212529;">
+<b>💡 작업 설명:</b><br>
+<span style="color:#495057;">{desc}</span>
+</div>
+<div style="margin-bottom:15px; display:flex; gap:10px; flex-wrap:wrap;">
+<span style="background-color:#e3f2fd; padding:6px 10px; border-radius:6px; color:#0d47a1; font-size:0.9rem;">
+<b>⏱️ 소요 시간:</b> {duration}
+</span>
+<span style="background-color:#fff3e0; padding:6px 10px; border-radius:6px; color:#e65100; font-size:0.9rem;">
+<b>🛠️ 필요 장비:</b> {tools}
+</span>
+</div>
+<div style="background:#ffffff; padding:15px; border-radius:6px; border:1px solid #dee2e6;">
+<b style="color:#1971c2;">📋 시공 프로세스 (Process):</b>
+<div style="margin-top:10px; line-height:1.6; color:#495057; font-size:0.95rem;">
+{steps_html}
+</div>
+</div>
+</div>
+"""
+    return html_content
 
 # --------------------------------------------------------------------------
 # [4] 메인 앱 로직
@@ -554,9 +549,16 @@ def main():
             ("화장실/바닥 타일", "실내 벽면/천장", "베란다/발코니"),
             index=0
         )
-        st.info(f"선택된 모드: **{location_context}**")
         st.divider()
-        st.caption("AI Construction Diagnosis v2.4")
+        
+        # [추가] 시공 면적 입력
+        st.subheader("📏 시공 면적 설정")
+        input_area = st.number_input("면적 입력 (단위: m²)", min_value=1.0, value=5.0, step=0.5, format="%.1f")
+        st.caption(f"기준 면적: 5.0m² (현재: {input_area}m² 적용)")
+        
+        st.divider()
+        st.info(f"선택된 모드: **{location_context}**")
+        st.caption("AI Construction Diagnosis v2.9 (Refined Quantity Logic)")
 
     st.title("🏗️ AI 하자 진단 Pro (Cost Analyzer)")
     st.markdown("---")
@@ -576,7 +578,6 @@ def main():
             st.write("1. 이미지 전처리 및 노이즈 제거 중...")
             
             # 테스트 모드 (하드코딩)
-            # 1) 타일 테스트
             if filename == "crack_test":
                  final_scenario_key = "tile_crack"
                  SCENARIOS[final_scenario_key]["best_pick"] = 5
@@ -584,7 +585,6 @@ def main():
                  time.sleep(0.5)
                  st.write("-> 강제 설정: 화장실 바닥 전체 철거 (Lv.5)")
                  
-            # 2) 곰팡이 테스트 (요청하신 부분)
             elif filename == "mold_test":
                  final_scenario_key = "mold"
                  SCENARIOS["mold"]["best_pick"] = 4
@@ -592,7 +592,6 @@ def main():
                  time.sleep(0.5)
                  st.write("-> 강제 설정: 결로성 곰팡이 (Lv.4)")
                  
-            # 3) 일반 모드 (AI 추론)
             else:
                 prediction_label = "crack"
                 if model:
@@ -605,7 +604,6 @@ def main():
                     except:
                         pass
                 
-                # 시나리오 결정
                 final_scenario_key = "tile_crack" # Default
                 if prediction_label == "mold":
                     final_scenario_key = "mold"
@@ -615,7 +613,6 @@ def main():
                     else:
                         final_scenario_key = "wall_crack"
                 
-                # 곰팡이일 경우 Lv.4 추천
                 if final_scenario_key == "mold":
                     SCENARIOS["mold"]["best_pick"] = 4
                 else:
@@ -627,8 +624,55 @@ def main():
             st.write("3. 마감재 포함 상세 견적 산출 중...")
             status.update(label="✅ 진단 완료!", state="complete", expanded=False)
 
-        data = SCENARIOS.get(final_scenario_key, SCENARIOS['tile_crack'])
+        # -------------------------------------------------------------
+        # [핵심 로직 수정]
+        # -------------------------------------------------------------
+        base_data = SCENARIOS.get(final_scenario_key, SCENARIOS['tile_crack'])
+        data = copy.deepcopy(base_data) 
         
+        area_factor = input_area / 5.0 
+        
+        # 면적에 따라 늘어나는 항목 리스트
+        variable_categories = ['자재', '마감', '마감자재', '폐기물', '부자재', '소모품']
+
+        for sol in data['solutions']:
+            if 'estimate_detail' in sol:
+                for item in sol['estimate_detail']:
+                    # [특수 로직 1] 방수액/고뫄스: 15m^2 당 1통 (15.1 -> 2통)
+                    if '방수액' in item['item'] or '고뫄스' in item['item']:
+                         # 18L 1통 = 15m2 커버 기준
+                         item['qty'] = math.ceil(input_area / 15.0)
+                         item['t_price'] = int(item['u_price'] * item['qty'])
+                    
+                    # [특수 로직 2] 레미탈: 5m^2 기준 8포 (넉넉하게) -> 면적 비례 -> 올림
+                    elif '레미탈' in item['item']:
+                         # 5m^2 : 8포 = input_area : x
+                         # x = (input_area / 5.0) * 8
+                         item['qty'] = math.ceil((input_area / 5.0) * 8)
+                         item['t_price'] = int(item['u_price'] * item['qty'])
+                    
+                    # [특수 로직 3] 벽지 (합지/실크) : 1롤 = 5평(약 16.5m^2) 기준
+                    elif '벽지' in item['item']:
+                         # 1롤 = 5평 = 약 16.5m^2 커버
+                         item['qty'] = math.ceil(input_area / 16.5)
+                         item['t_price'] = int(item['u_price'] * item['qty'])
+
+                    # [일반 로직] 나머지 자재
+                    elif item['cat'] in variable_categories:
+                        raw_qty = item['qty'] * area_factor
+                        
+                        # 타일/장판/시트는 Loss 10~15% 추가
+                        if '타일' in item['item'] or '장판' in item['item'] or '시트' in item['item']:
+                            raw_qty = raw_qty * 1.15 
+                        
+                        # 무조건 올림 처리 (정수)
+                        final_qty = math.ceil(raw_qty)
+                        if final_qty < 1: final_qty = 1
+                        
+                        item['qty'] = final_qty
+                        item['t_price'] = int(item['u_price'] * final_qty)
+        # -------------------------------------------------------------
+
         c1, c2, c3 = st.columns([1, 1, 1.2])
         with c1:
             st.image(image, caption="Original Image", use_container_width=True)
@@ -638,14 +682,8 @@ def main():
             st.subheader(f"📊 {data['title']}")
             st.plotly_chart(make_radar_chart(data['radar'], data['color']), use_container_width=True)
 
-        # ------------------------------------------------------------------
-        # [NEW] 타자기 효과 (Streaming Effect) 적용 부분
-        # ------------------------------------------------------------------
-        
-        # 1. Risk Report (HTML 박스 + 타자기 효과)
-        # HTML 태그 파손 방지를 위해 '단어 단위'로 쪼개서 출력
+        # 1. Risk Report
         risk_placeholder = st.empty()
-        
         def render_risk_box(content):
             risk_placeholder.markdown(f"""
                 <div class="risk-box">
@@ -653,42 +691,28 @@ def main():
                     {content}
                 </div>
             """, unsafe_allow_html=True)
-
         time.sleep(0.5)
-        
         full_risk_text = data['risk_report']
         curr_risk_text = ""
-        
-        # 단어(공백) 단위로 루프
         for chunk in full_risk_text.split(' '):
             curr_risk_text += chunk + " "
-            render_risk_box(curr_risk_text + "▌") # 커서 효과 추가
-            time.sleep(0.04) # 출력 속도 조절
-            
-        render_risk_box(full_risk_text) # 커서 제거된 최종본 출력
+            render_risk_box(curr_risk_text + "▌")
+            time.sleep(0.04)
+        render_risk_box(full_risk_text)
 
-        # 2. AI 종합 소견 (Info 박스 + 타자기 효과)
-        # 일반 텍스트이므로 '글자 단위'로 자연스럽게 출력
-        st.write("") # 여백
+        st.write("") 
         info_placeholder = st.empty()
-        
         full_msg = f"**💡 AI 종합 소견:** {data['msg']}"
         curr_msg = ""
-        
         for char in full_msg:
             curr_msg += char
             info_placeholder.info(curr_msg + "▌")
-            time.sleep(0.02) # 출력 속도 조절
-            
-        info_placeholder.info(full_msg) # 최종본 출력
-
-        # ------------------------------------------------------------------
-        # [End of NEW Effect]
-        # ------------------------------------------------------------------
+            time.sleep(0.02)
+        info_placeholder.info(full_msg)
 
         st.divider()
         
-        st.markdown("### 💰 솔루션별 예상 비용 비교")
+        st.markdown(f"### 💰 솔루션별 예상 비용 비교 (면적: {input_area}m² 기준)")
         df_summary = create_cost_summary(data['solutions'])
         col_chart, col_table = st.columns([1.5, 1])
         with col_chart:
@@ -721,8 +745,30 @@ def main():
             
             with st.expander(expander_title, expanded=is_best):
                 st.markdown(badges, unsafe_allow_html=True)
-                st.markdown(render_combined_document(sol), unsafe_allow_html=True)
+                st.markdown(render_combined_document_view(sol), unsafe_allow_html=True)
                 
+                if 'estimate_detail' in sol:
+                    st.markdown("#### 🧾 상세 견적 내역 (Detailed Estimate)")
+                    detail_data = sol['estimate_detail']
+                    df_detail = pd.DataFrame(detail_data)
+                    total_sum = df_detail['t_price'].sum()
+                    
+                    df_view = df_detail[['cat', 'item', 'spec', 'unit', 'qty', 'u_price', 't_price']]
+                    df_view.columns = ['구분', '품목', '규격', '단위', '수량', '단가', '금액']
+                    
+                    st.dataframe(
+                        df_view, 
+                        hide_index=True, 
+                        use_container_width=True,
+                        column_config={
+                            "단가": st.column_config.NumberColumn(format="%d"),
+                            "금액": st.column_config.NumberColumn(format="%d"),
+                            "수량": st.column_config.NumberColumn(format="%d") # 정수 포맷
+                        }
+                    )
+                    st.caption("※ 자재 수량은 시공 여유율(Loss)을 포함하여 박스/롤 단위로 올림 처리되었습니다.")
+                    st.info(f"💰 **총 예상 비용 합계 ({input_area}m² 기준):** {total_sum:,} 원")
+
                 pdf_data = create_pdf_bytes(sol, data['title'])
                 
                 btn_col1, btn_col2 = st.columns([4, 1])
